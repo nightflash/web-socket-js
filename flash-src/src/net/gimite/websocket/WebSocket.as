@@ -72,6 +72,8 @@ public class WebSocket extends EventDispatcher {
   private var logger:IWebSocketLogger;
   private var base64Encoder:Base64Encoder = new Base64Encoder();
   
+  private var income_buffer:String = "";
+  
   public function WebSocket(
       id:int, url:String, protocols:Array, origin:String,
       proxyHost:String, proxyPort:int,
@@ -322,22 +324,30 @@ public class WebSocket extends EventDispatcher {
           pos = -1;
           if (frame.rsv != 0) {
             close(1002, "RSV must be 0.");
-          } else if (frame.mask) {
-            close(1002, "Frame from server must not be masked.");
           } else if (frame.opcode >= 0x08 && frame.opcode <= 0x0f && frame.payload.length >= 126) {
             close(1004, "Payload of control frame must be less than 126 bytes.");
           } else {
             switch (frame.opcode) {
               case OPCODE_CONTINUATION:
-                close(1003, "Received continuation frame, which is not implemented.");
-                break;
-              case OPCODE_TEXT:
-                var data:String = readUTFBytes(frame.payload, 0, frame.payload.length);
-                try {
-                  this.dispatchEvent(new WebSocketEvent("message", encodeURIComponent(data)));
-                } catch (ex:URIError) {
-                  close(1007, "URIError while encoding the received data.");
-                }
+              case OPCODE_TEXT:              
+				if(frame.masking) {
+					for (var i:int = 0; i < frame.payload.length; i++) {
+					  frame.payload[i] = frame.mask[i % 4] ^ frame.payload[i];
+					}
+				}				
+				var data:String = readUTFBytes(frame.payload, 0, frame.payload.length);
+                
+                this.income_buffer += data;
+                
+                if(frame.fin) {
+					try {
+					  this.dispatchEvent(new WebSocketEvent("message", encodeURIComponent(this.income_buffer)));
+					} catch (ex:URIError) {
+					  close(1007, "URIError while encoding the received data.");
+					}
+					
+					this.income_buffer = "";
+				}
                 break;
               case OPCODE_BINARY:
                 // See https://github.com/gimite/web-socket-js/pull/89
@@ -493,9 +503,7 @@ public class WebSocket extends EventDispatcher {
     frame.fin = (buffer[0] & 0x80) != 0;
     frame.rsv = (buffer[0] & 0x70) >> 4;
     frame.opcode  = buffer[0] & 0x0f;
-    // Payload unmasking is not implemented because masking frames from server
-    // is not allowed. This field is used only for error checking.
-    frame.mask = (buffer[1] & 0x80) != 0;
+    frame.masking = (buffer[1] & 0x80) != 0;
     plength = buffer[1] & 0x7f;
 
     if (plength == 126) {
@@ -524,7 +532,16 @@ public class WebSocket extends EventDispatcher {
         return null;
       }
       
-    }
+    } else {
+	  buffer.position = 2;
+	  buffer.endian = Endian.BIG_ENDIAN;
+	}
+    
+    if(frame.masking) {
+		frame.mask = new ByteArray();
+		frame.mask.writeUnsignedInt(buffer.readUnsignedInt());
+		hlength += 4;
+	}
 
     if (buffer.length < hlength + plength) {
       return null;

@@ -14,7 +14,8 @@ public class WebSocketFrame {
   
   // Fields below are not used when used as a parameter of sendFrame().
   public var length:uint = 0;
-  public var mask:Boolean = false;
+  public var masking:Boolean = false;
+  public var mask:ByteArray;
   
 }
 
